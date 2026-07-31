@@ -1,35 +1,58 @@
 pipeline {
-  agent any
-  
-   tools {nodejs "node"}
-    
-  stages {
-    stage('Checkout') {
-            steps {
-                
-                    git branch: 'main', url: 'https://github.com/Urmilaa/Deploy-NodeApp-to-AWS-EKS-using-Jenkins-Pipeline.git'
-                
-                 }
-        }
-     
-    stage('Node JS Build') {
-      steps {
-        sh 'npm install'
-      }
+    agent any
+
+    tools {
+        nodejs "node"
     }
-  
-     stage('Build Node JS Docker Image') {
+
+    environment {
+        IMAGE_NAME   = "urmidevops/node-app-1.0"
+        IMAGE_TAG    = "${BUILD_NUMBER}"
+
+        CLUSTER_NAME = "demo-eks-cluster"
+        AWS_REGION   = "us-east-1"
+    }
+
+    stages {
+
+        stage('Checkout') {
             steps {
-                script {
-                  sh 'docker build -t urmidevops/node-app-1.0 .'
-                }
+                git branch: 'main',
+                    url: 'https://github.com/Urmilaa/Deploy-NodeApp-to-AWS-EKS-using-Jenkins-Pipeline.git'
             }
         }
-       stage('Update Trivy Database') {
+
+        stage('Install Node Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Build Docker Image') {
             steps {
                 sh '''
-                    echo "Updating Trivy vulnerability database..."
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+                '''
+            }
+        }
 
+        stage('Verify Docker Image') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "IMAGE_NAME : ${IMAGE_NAME}"
+                    echo "IMAGE_TAG  : ${IMAGE_TAG}"
+                    echo "======================================="
+
+                    docker images | grep node-app
+                '''
+            }
+        }
+
+        stage('Update Trivy Database') {
+            steps {
+                sh '''
                     trivy image \
                         --download-db-only \
                         --no-progress
@@ -40,8 +63,6 @@ pipeline {
         stage('Scan Docker Image') {
             steps {
                 sh '''
-                    echo "Scanning Docker image..."
-
                     trivy image \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
@@ -62,56 +83,80 @@ pipeline {
             }
         }
 
-        stage('Deploy Docker Image to DockerHub') {
+        stage('Login to Docker Hub') {
             steps {
-                script {
-              withCredentials([usernamePassword(
-                              credentialsId: 'dockerhub-creds',
-                              usernameVariable: 'DOCKER_USER',
-                              passwordVariable: 'DOCKER_TOKEN'
-              )]) {
-                      sh '''
-                      echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USER" --password-stdin
-                      '''
-                  }
-            
-                      sh 'docker push urmidevops/node-app-1.0'
-               }
-            }   
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_TOKEN'
+                    )
+                ]) {
+
+                    sh '''
+                        echo "$DOCKER_TOKEN" | docker login \
+                        -u "$DOCKER_USER" \
+                        --password-stdin
+                    '''
+                }
+            }
         }
-         
-     stage('Deploying Node App to Kubernetes') {
-      steps {
-        script {
-          sh ('aws eks update-kubeconfig --name demo-eks-cluster --region us-east-1')
-          sh "kubectl get ns"
-          sh "kubectl apply -f nodejsapp.yaml"
+
+        stage('Push Docker Images') {
+            steps {
+                sh '''
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${IMAGE_NAME}:latest
+                '''
+            }
         }
-      }
+
+        stage('Deploy to Amazon EKS') {
+            steps {
+                sh '''
+                    aws eks update-kubeconfig \
+                        --name ${CLUSTER_NAME} \
+                        --region ${AWS_REGION}
+
+                    kubectl get nodes
+                    kubectl get ns
+
+                    kubectl apply -f nodejsapp.yaml
+
+                    kubectl rollout status deployment/nodejs-app
+                '''
+            }
+        }
     }
-  }
-   post {
+
+    post {
 
         always {
 
-            archiveArtifacts artifacts: '''
-                trivy-report.json
-            ''', fingerprint: true
+            archiveArtifacts artifacts: 'trivy-report.json',
+                             fingerprint: true
 
-            sh 'docker logout || true'
+            sh '''
+                docker logout || true
+            '''
         }
 
         success {
+
+            echo "===================================="
+            echo "Pipeline completed successfully."
             echo "Docker image scanned successfully."
-            echo "Image pushed to Docker Hub."
+            echo "Docker image pushed to Docker Hub."
+            echo "Application deployed to EKS."
+            echo "===================================="
         }
 
         failure {
+
+            echo "===================================="
             echo "Pipeline failed."
-            echo "High/Critical vulnerabilities detected."
+            echo "Check Trivy scan or deployment logs."
+            echo "===================================="
         }
     }
-
-
-
 }
