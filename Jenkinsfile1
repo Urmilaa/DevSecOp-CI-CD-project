@@ -25,7 +25,42 @@ pipeline {
                 }
             }
         }
+       stage('Update Trivy Database') {
+            steps {
+                sh '''
+                    echo "Updating Trivy vulnerability database..."
 
+                    trivy image \
+                        --download-db-only \
+                        --no-progress
+                '''
+            }
+        }
+
+        stage('Scan Docker Image') {
+            steps {
+                sh '''
+                    echo "Scanning Docker image..."
+
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        --no-progress \
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Generate Trivy JSON Report') {
+            steps {
+                sh '''
+                    trivy image \
+                        --format json \
+                        --output trivy-report.json \
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                '''
+            }
+        }
 
         stage('Deploy Docker Image to DockerHub') {
             steps {
@@ -54,6 +89,29 @@ pipeline {
         }
       }
     }
-
   }
+   post {
+
+        always {
+
+            archiveArtifacts artifacts: '''
+                trivy-report.json
+            ''', fingerprint: true
+
+            sh 'docker logout || true'
+        }
+
+        success {
+            echo "Docker image scanned successfully."
+            echo "Image pushed to Docker Hub."
+        }
+
+        failure {
+            echo "Pipeline failed."
+            echo "High/Critical vulnerabilities detected."
+        }
+    }
+
+
+
 }
