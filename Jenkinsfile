@@ -25,8 +25,12 @@ pipeline {
                     credentialsId: 'aws-creds'   
                 ]]) {
                     dir('terraform') {
-                        sh 'aws sts get-caller-identity'
-                        sh 'terraform init'
+                        sh '''
+                           aws sts get-caller-identity'
+                           terraform init \
+                           -input=false \
+                           -reconfigure
+                          '''
                     }
                 }
             }
