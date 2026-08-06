@@ -27,9 +27,7 @@ pipeline {
                     dir('terraform') {
                         sh '''
                            aws sts get-caller-identity
-                           terraform init \
-                            -input=false \
-                            -migrate-state
+                           terraform init -input=false -reconfigure
                           '''
                     }
                 }
