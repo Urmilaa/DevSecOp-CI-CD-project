@@ -26,7 +26,7 @@ pipeline {
                 ]]) {
                     dir('terraform') {
                         sh '''
-                           aws sts get-caller-identity'
+                           aws sts get-caller-identity
                            terraform init \
                             -input=false \
                             -migrate-state
