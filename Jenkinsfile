@@ -28,8 +28,8 @@ pipeline {
                         sh '''
                            aws sts get-caller-identity'
                            terraform init \
-                           -input=false \
-                           -reconfigure
+                            -input=false \
+                            -migrate-state
                           '''
                     }
                 }
