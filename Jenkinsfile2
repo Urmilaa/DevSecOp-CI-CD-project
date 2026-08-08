@@ -1,0 +1,141 @@
+pipeline {
+    agent any
+
+    environment {
+        CLUSTER_NAME = "demo-eks-cluster"
+        AWS_REGION   = "us-east-1"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Urmilaa/DevSecOp-CI-CD-project.git'
+            }
+        }
+
+        stage('Configure EKS Access') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "Configuring EKS access..."
+                    echo "Cluster : ${CLUSTER_NAME}"
+                    echo "Region  : ${AWS_REGION}"
+                    echo "======================================="
+
+                    aws eks update-kubeconfig \
+                        --name ${CLUSTER_NAME} \
+                        --region ${AWS_REGION}
+
+                    echo "Checking Kubernetes nodes..."
+                    kubectl get nodes
+
+                    echo "Checking namespaces..."
+                    kubectl get ns
+                '''
+            }
+        }
+
+        stage('Check Application Resources') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "Application resources before deletion"
+                    echo "======================================="
+
+                    kubectl get deployment nodejs-app || true
+                    kubectl get service || true
+                    kubectl get pods -o wide || true
+                '''
+            }
+        }
+
+        stage('Destroy NodeJS Application') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "Deleting NodeJS application..."
+                    echo "======================================="
+
+                    kubectl delete -f nodejsapp.yaml --ignore-not-found=true
+                '''
+            }
+        }
+
+        stage('Wait for Resources to Terminate') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "Waiting for resources to terminate..."
+                    echo "======================================="
+
+                    sleep 10
+
+                    echo "Checking deployment..."
+                    kubectl get deployment nodejs-app || true
+
+                    echo "Checking pods..."
+                    kubectl get pods || true
+
+                    echo "Checking services..."
+                    kubectl get svc || true
+                '''
+            }
+        }
+
+        stage('Verify Destruction') {
+            steps {
+                sh '''
+                    echo "======================================="
+                    echo "Final verification"
+                    echo "======================================="
+
+                    if kubectl get deployment nodejs-app >/dev/null 2>&1; then
+                        echo "ERROR: nodejs-app deployment still exists."
+                        exit 1
+                    else
+                        echo "SUCCESS: nodejs-app deployment deleted."
+                    fi
+
+                    echo ""
+                    echo "Remaining Kubernetes resources:"
+                    kubectl get pods || true
+                    kubectl get svc || true
+                    kubectl get deployment || true
+
+                    echo ""
+                    echo "NodeJS application destruction completed."
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo """
+====================================
+Destroy Pipeline Completed
+====================================
+NodeJS application has been
+successfully removed from EKS.
+
+Cluster : ${CLUSTER_NAME}
+Region  : ${AWS_REGION}
+====================================
+"""
+        }
+
+        failure {
+            echo """
+====================================
+Destroy Pipeline Failed
+====================================
+Check the Jenkins console logs
+for details.
+====================================
+"""
+        }
+    }
+}
