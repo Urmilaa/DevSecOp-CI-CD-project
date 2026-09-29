@@ -1,6 +1,6 @@
 FROM node:22-bookworm-slim
 
-WORKDIR /usr/src/app
+WORKDIR /usr/src/app1
 
 COPY package*.json ./
 
