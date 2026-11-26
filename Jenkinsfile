@@ -18,21 +18,21 @@ pipeline {
             }
         }
 
-        stage('Terraform Init') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'   
-                ]]) {
-                    dir('terraform') {
-                        sh '''
-                           aws sts get-caller-identity
-                           terraform init -input=false -reconfigure
-                          '''
-                    }
-                }
-            }
+        
+stage('Terraform Init') {
+    steps {
+        dir('terraform') {
+            sh '''
+                echo "Checking AWS identity"
+                aws sts get-caller-identity
+
+                echo "Initializing Terraform"
+                terraform init -input=false -reconfigure
+            '''
         }
+    }
+}
+
           stage('Terraform Validate') {
             steps {
                 dir('terraform') {
