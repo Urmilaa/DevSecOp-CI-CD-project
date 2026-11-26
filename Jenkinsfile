@@ -41,18 +41,24 @@ stage('Terraform Init') {
             }
         }
         stage('Terraform Plan') {
-            steps {                                
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    dir('terraform') {
-                        sh 'terraform plan -out=tfplan'
-                        sh 'terraform show -no-color tfplan > tfplan.txt'
-                    }
-                }
-            }
+    steps {
+        dir('terraform') {
+            sh '''
+                set -e
+
+                echo "===== AWS Identity ====="
+                aws sts get-caller-identity
+
+                echo "===== Terraform Plan ====="
+                terraform plan -input=false -out=tfplan
+
+                echo "===== Save Terraform Plan ====="
+                terraform show -no-color tfplan > tfplan.txt
+            '''
         }
+    }
+}
+
 
         stage('Approval') {
 
