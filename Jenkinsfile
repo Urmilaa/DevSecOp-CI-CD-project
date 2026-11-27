@@ -17,7 +17,7 @@ pipeline {
     }
 
     environment {
-        AWS_DEFAULT_REGION = ‘eu-north-1’
+        AWS_DEFAULT_REGION = 'eu-north-1'
         CLUSTER_NAME = 'demo-eks-cluster'
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
