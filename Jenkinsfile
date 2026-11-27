@@ -1,182 +1,277 @@
+
 pipeline {
 
     agent any
 
-    parameters {
-        booleanParam(name: 'autoApprove', defaultValue: false, description: 'Automatically run apply after generating plan?')
-       
+    options {
+        skipDefaultCheckout(true)
+        timestamps()
     }
 
-  
+    parameters {
+        booleanParam(
+            name: 'autoApprove',
+            defaultValue: false,
+            description: 'Automatically run apply after generating plan?'
+        )
+    }
+
+    environment {
+        AWS_DEFAULT_REGION = ‘eu-north-1’
+        CLUSTER_NAME = 'demo-eks-cluster'
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'
+    }
+
     stages {
+
+        // ==========================================
+        // 1. CHECKOUT
+        // ==========================================
 
         stage('Checkout') {
             steps {
                 dir('terraform') {
-                    git branch: 'main', url: 'https://github.com/Urmilaa/DevSecOp-CI-CD-project.git'
+                    deleteDir()
+
+                    git branch: 'main',
+                        url: 'https://github.com/Urmilaa/DevSecOp-CI-CD-project.git'
                 }
             }
         }
 
-        
-stage('Terraform Init') {
-    steps {
-        dir('terraform') {
-            sh '''
-                echo "Checking AWS identity"
-                aws sts get-caller-identity
+        // ==========================================
+        // 2. AWS AUTHENTICATION
+        // ==========================================
 
-                echo "Initializing Terraform"
-                terraform init -input=false -reconfigure
-            '''
+        stage('AWS Authentication') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "===== AWS Identity ====="
+                    aws sts get-caller-identity
+
+                    echo "===== AWS Region ====="
+                    aws configure get region || true
+                '''
+            }
         }
-    }
-}
 
-          stage('Terraform Validate') {
+        // ==========================================
+        // 3. TERRAFORM INIT
+        // ==========================================
+
+        stage('Terraform Init') {
             steps {
                 dir('terraform') {
-                sh 'terraform validate'
+                    sh '''
+                        set -e
+
+                        echo "===== Terraform Init ====="
+
+                        terraform init \
+                            -input=false \
+                            -reconfigure
+                    '''
                 }
             }
         }
-        stage('Terraform Plan') {
-    steps {
-        dir('terraform') {
-            sh '''
-                set -e
 
-                echo "===== AWS Identity ====="
-                aws sts get-caller-identity
+        // ==========================================
+        // 4. TERRAFORM VALIDATE
+        // ==========================================
 
-                echo "===== Terraform Plan ====="
-                terraform plan -input=false -out=tfplan
+        stage('Terraform Validate') {
+            steps {
+                dir('terraform') {
+                    sh '''
+                        set -e
 
-                echo "===== Save Terraform Plan ====="
-                terraform show -no-color tfplan > tfplan.txt
-            '''
+                        terraform validate
+                    '''
+                }
+            }
         }
-    }
-}
 
+        // ==========================================
+        // 5. TERRAFORM PLAN
+        // ==========================================
+
+        stage('Terraform Plan') {
+            steps {
+                dir('terraform') {
+                    sh '''
+                        set -e
+
+                        echo "===== AWS Identity ====="
+                        aws sts get-caller-identity
+
+                        echo "===== Terraform Plan ====="
+
+                        terraform plan \
+                            -input=false \
+                            -out=tfplan
+
+                        echo "===== Terraform Plan Details ====="
+
+                        terraform show -no-color tfplan > tfplan.txt
+
+                        cat tfplan.txt
+                    '''
+                }
+            }
+        }
+
+        // ==========================================
+        // 6. MANUAL APPROVAL
+        // ==========================================
 
         stage('Approval') {
 
             when {
-                not { equals expected: true, actual: params.autoApprove }
+                expression {
+                    return !params.autoApprove
+                }
             }
 
             steps {
                 script {
-                    def plan = readFile 'terraform/tfplan.txt'
 
-                    input message: "Do you want to apply the plan?",
-                    parameters: [
-                        text(name: 'Terraform Plan', defaultValue: plan, description: 'Review Terraform Plan')
-                    ]
+                    def plan = readFile(
+                        'terraform/tfplan.txt'
+                    )
+
+                    input(
+                        message: """
+                        Review the Terraform plan below.
+
+                        Do you approve Terraform Apply?
+
+                        ${plan}
+                        """,
+                        ok: 'Approve Terraform Apply'
+                    )
                 }
             }
         }
+
+        // ==========================================
+        // 7. TERRAFORM APPLY
+        // ==========================================
 
         stage('Terraform Apply') {
             steps {
-                 withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    dir('terraform') {
-                        sh 'terraform apply -input=false tfplan'
-                    }
+                dir('terraform') {
+                    sh '''
+                        set -e
+
+                        echo "===== AWS Identity ====="
+                        aws sts get-caller-identity
+
+                        echo "===== Terraform Apply ====="
+
+                        terraform apply \
+                            -input=false \
+                            tfplan
+                    '''
                 }
             }
         }
-        
-    stage('Configure kubeconfig') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh '''
-                set -e
 
-                CLUSTER_NAME="demo-eks-cluster"
-                AWS_REGION="us-east-1"
+        // ==========================================
+        // 8. CONFIGURE KUBECONFIG
+        // ==========================================
 
-                echo "===== AWS Identity ====="
-                aws sts get-caller-identity
+        stage('Configure kubeconfig') {
+            steps {
+                sh '''
+                    set -e
 
-                echo "===== kubectl Version ====="
-                which kubectl
-                kubectl version --client
+                    echo "===== AWS Identity ====="
+                    aws sts get-caller-identity
 
-                mkdir -p /var/lib/jenkins/.kube
+                    echo "===== kubectl Version ====="
+                    which kubectl
+                    kubectl version --client
 
-                rm -f /var/lib/jenkins/.kube/config
+                    echo "===== Configure kubeconfig ====="
 
-                aws eks update-kubeconfig \
-                    --region ${AWS_REGION} \
-                    --name ${CLUSTER_NAME} \
-                    --kubeconfig /var/lib/jenkins/.kube/config
+                    mkdir -p "$HOME/.kube"
 
-                echo "===== Current Context ====="
-                KUBECONFIG=/var/lib/jenkins/.kube/config kubectl config current-context
+                    aws eks update-kubeconfig \
+                        --region "$AWS_DEFAULT_REGION" \
+                        --name "$CLUSTER_NAME" \
+                        --kubeconfig "$KUBECONFIG"
 
-                echo "Kubeconfig updated successfully."
-            '''
+                    echo "===== Current Context ====="
+
+                    kubectl config current-context
+
+                    echo "Kubeconfig updated successfully."
+                '''
+            }
+        }
+
+        // ==========================================
+        // 9. VERIFY EKS CLUSTER
+        // ==========================================
+
+        stage('Verify EKS Cluster') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "===== AWS Identity ====="
+                    aws sts get-caller-identity
+
+                    echo "===== Kubernetes Context ====="
+                    kubectl config current-context
+
+                    echo "===== Cluster Info ====="
+                    kubectl cluster-info
+
+                    echo "===== Cluster Nodes ====="
+                    kubectl get nodes -o wide
+
+                    echo "===== Namespaces ====="
+                    kubectl get namespaces
+                '''
+            }
+        }
+
+        // ==========================================
+        // 10. VALIDATE EKS RESOURCES
+        // ==========================================
+
+        stage('Validate EKS Resources') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "===== Kubernetes Nodes ====="
+                    kubectl get nodes
+
+                    echo "===== System Pods ====="
+                    kubectl get pods -n kube-system
+
+                    echo "===== Services ====="
+                    kubectl get svc -A
+                '''
+            }
         }
     }
-}
-        
-stage('Verify EKS Cluster') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh '''
-                set -e
 
-                export KUBECONFIG=/var/lib/jenkins/.kube/config
-
-                echo "===== AWS Identity ====="
-                aws sts get-caller-identity
-
-                echo "===== kubectl ====="
-                which kubectl
-                kubectl version --client
-
-                echo "===== Current Context ====="
-                kubectl config current-context
-
-                echo "===== Cluster Info ====="
-                kubectl cluster-info
-
-                echo "===== Cluster Nodes ====="
-                kubectl get nodes -o wide
-
-                echo "===== Namespaces ====="
-                kubectl get ns
-            '''
+    post {
+        success {
+            echo 'Terraform deployment and EKS validation completed successfully!'
         }
-    }
-}
- stage('Validate EKS Resources') {
-    steps {
-        sh '''
-            export KUBECONFIG=/var/lib/jenkins/.kube/config
 
-            echo "===== Nodes ====="
-            kubectl get nodes
+        failure {
+            echo 'Pipeline failed. Check Jenkins console output.'
+        }
 
-            echo "===== System Pods ====="
-            kubectl get pods -n kube-system
-
-            echo "===== Services ====="
-            kubectl get svc -A
-        '''
-    }
-}
-        
+        always {
+            echo 'Jenkins pipeline execution completed.'
+        }
     }
 }
